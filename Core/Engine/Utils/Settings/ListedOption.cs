@@ -291,6 +291,7 @@ namespace Engine.Utils.Settings
         {
             BoundKey k => k.Key.ToString(),
             BoundMouseButton m => m.MouseButton.ToString() + " Click",
+            BoundMouseWheel w => w.Direction == MouseWheelDirection.Up ? "Scroll Up" : "Scroll Down",
             BoundGamepadButton g => $"GP: {g.GamepadButton.ToString()}",
             null => "---",
             _ => "N/A"

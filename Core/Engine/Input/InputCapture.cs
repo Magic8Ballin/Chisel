@@ -45,6 +45,20 @@ public static class InputCapture
             return;
         }
 
+        var scrollDirection = BetterMouse.GetScrollDir();
+        if (scrollDirection != 0)
+        {
+            var callback = onCaptured;
+            onCaptured = null; onCancelled = null;
+            callback(new BoundMouseWheel
+            {
+                Direction = scrollDirection > 0
+                    ? MouseWheelDirection.Up
+                    : MouseWheelDirection.Down
+            });
+            return;
+        }
+
         foreach (var btn in Enum.GetValues<MouseButton>())
         {
             var b = new BoundMouseButton { MouseButton = btn };

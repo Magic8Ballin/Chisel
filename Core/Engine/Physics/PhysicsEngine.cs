@@ -648,8 +648,14 @@ namespace Engine.Physics
             if (MainEngine.Instance.IsLoading) return;
 
             var key = (manifold.SubShapeID1, manifold.SubShapeID2);
+            // Jolt's manifold normal points from body 1 toward body 2. Store the
+            // normal facing out of the contacted surface and into this body so
+            // grounding and slope movement see the same orientation regardless
+            // of which side of the pair the entity occupies.
+            var normal = manifold.WorldSpaceNormal.ToXNA();
+            if (isOne) normal = -normal;
             var value = (
-                manifold.WorldSpaceNormal.ToXNA(),
+                normal,
                 isOne ? manifold.GetWorldSpaceContactPointOn1(0).ToXNA()
                       : manifold.GetWorldSpaceContactPointOn2(0).ToXNA(),
                 other

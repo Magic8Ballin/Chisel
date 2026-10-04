@@ -32,6 +32,9 @@ public static class InputRegistry
         bindings.Values.Where(b => b.Category == category);
     public static void Save()
     {
+        var dir = Path.GetDirectoryName(savePath)!;
+        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
         var data = bindings.ToDictionary(
             kvp => kvp.Key,
             kvp => new SavedBinding
@@ -76,6 +79,7 @@ public class BindingData
     {
         BoundKey k => new BindingData { Type = "key", Value = k.Key.ToString() },
         BoundMouseButton m => new BindingData { Type = "mouse", Value = m.MouseButton.ToString() },
+        BoundMouseWheel w => new BindingData { Type = "wheel", Value = w.Direction.ToString() },
         BoundGamepadButton g => new BindingData { Type = "gamepad", Value = g.GamepadButton.ToString() },
         _ => null
     };
@@ -84,6 +88,7 @@ public class BindingData
     {
         "key" => new BoundKey { Key = Enum.Parse<Keys>(Value) },
         "mouse" => new BoundMouseButton { MouseButton = Enum.Parse<MouseButton>(Value) },
+        "wheel" => new BoundMouseWheel { Direction = Enum.Parse<MouseWheelDirection>(Value) },
         "gamepad" => new BoundGamepadButton(0, Enum.Parse<Buttons>(Value)),
         _ => default
     };
