@@ -51,6 +51,7 @@ public class BetterMouse
     static float timeSinceMiddleClick = 0;
 
     static int wheelDelta = 0;
+    static int previousWheelDelta = 0;
 
     const int miliAllowedTime = 250; //0.25 of a second
 
@@ -70,6 +71,7 @@ public class BetterMouse
         WasRightDown = RightDown;
         WasMiddleDown = MiddleDown;
 
+        previousWheelDelta = wheelDelta;
         wheelDelta = currentMouseState.ScrollWheelValue - previousMouseState.ScrollWheelValue;
 
         if (currentMouseState.LeftButton == ButtonState.Pressed) { timeSinceLeftClick = DateTime.Now.Millisecond; LeftDown = true; }
@@ -85,6 +87,11 @@ public class BetterMouse
     public static int GetScrollDir()
     {
         return int.Sign(wheelDelta);
+    }
+
+    public static int GetPreviousScrollDir()
+    {
+        return int.Sign(previousWheelDelta);
     }
 
     public static bool WasLeftPressed() => LeftDown == true && WasleftDown == false;

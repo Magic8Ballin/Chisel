@@ -97,6 +97,24 @@ public class BoundMouseButton : SingleInputBinding
                                      MouseButton == MouseButton.Right ? BetterMouse.WasRightDown && !BetterMouse.RightDown :
                                                                     BetterMouse.WasMiddleDown && !BetterMouse.MiddleDown;
 }
+public enum MouseWheelDirection
+{
+    Up,
+    Down
+};
+public class BoundMouseWheel : SingleInputBinding
+{
+    public MouseWheelDirection Direction;
+
+    private int DirectionSign => Direction == MouseWheelDirection.Up ? 1 : -1;
+
+    public float GetValue() => IsPressed() ? 1 : 0;
+    public bool IsPressed() => BetterMouse.GetScrollDir() == DirectionSign;
+    // A wheel notch is an event, not a held button. Consecutive notches in the same
+    // direction must each produce a press (important for scroll-wheel jumping).
+    public bool HasBeenPressed() => IsPressed();
+    public bool HasBeenReleased() => !IsPressed() && BetterMouse.GetPreviousScrollDir() == DirectionSign;
+}
 public enum GamepadJoystick
 {
     Left,

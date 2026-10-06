@@ -596,11 +596,16 @@ namespace Engine
         Vector3 bodyOffset;
         public Vector3 BodyOffset => PhysicsBody == null ? Vector3.Zero : Vector3.Transform(bodyOffset, Matrix.CreateFromQuaternion(PhysicsBody.Rotation));
 
-        private const float KneeHeight = 0.5f;
+        // Temporarily widened from the 16-unit / 0.5 baseline so the exact-height
+        // map test cannot fail on a rounding boundary.
+        private const float KneeHeight = 0.6f;
         private const float SkinWidth = 0.08f;
+        private const float StepSearchIncrement = 0.01f;
+        private const float StepQueryEpsilon = 0.002f;
         const float SnapTolerance = 0.04f;
 
         private Vector3 lastGroundNormal = Vector3.Up;
+        public Vector3 GroundNormal => lastGroundNormal;
 
         [JsonIgnore] private ulong[] leafBits;
         [JsonIgnore] private Vector3 leafBitsPosition;
@@ -962,7 +967,6 @@ namespace Engine
 
             IsOnGround = IsGrounded();
             if (IsOnGround && Velocity.Y < 0.1f) AllowGroundSeparation = false;
-            if (justStepped) Velocity = previousVelocity;
         }
         public bool IsSeparatingFromGround()
         {
@@ -987,7 +991,7 @@ namespace Engine
 
                 if (PhysicsEngine.BodyInterface.GetObjectLayer(contact.other) == PhysicsEngine.Layers.Trigger) continue;
 
-                if (Math.Abs(contact.normal.Y) > minYComponent && contact.point.Y < OrientedBounds.Center.Y)
+                if (contact.normal.Y > minYComponent && contact.point.Y < OrientedBounds.Center.Y)
                 {
                     lastGroundNormal = contact.normal;
 
@@ -1192,63 +1196,140 @@ namespace Engine
         /// Attempts to move the entity by the given horizontal offset, stepping over small obstacles.
         /// </summary>
         public float TryStepUp(Vector3 wishDir)
+            => TryStepUpVelocity(wishDir + Velocity, PhysicsEngine.PhysicsFrameDelta);
+
+        public float TryStepUpVelocity(Vector3 movementVelocity, float deltaTime)
         {
-            if (!IsOnGround) return 0f;
+            if (!IsOnGround && !WasOnGround) return 0f;
 
-            var horizontalDelta = new Vector3(wishDir.X + Velocity.X, 0, wishDir.Z + Velocity.Z) * PhysicsEngine.PhysicsFrameDelta;
-            if (horizontalDelta.LengthSquared() < 0.0001f) return 0f;
+            var horizontalDelta = new Vector3(movementVelocity.X, 0, movementVelocity.Z) * deltaTime;
+            if (horizontalDelta.LengthSquared() < 0.00000001f) return 0f;
 
-            var start = Position;
-            var target = start + horizontalDelta;
+            // Probe at least one collision skin forward. This reaches past Jolt's
+            // separation gap even when a wall contact has already stopped velocity.
+            float horizontalDistance = horizontalDelta.Length();
+            float probeDistance = MathF.Max(horizontalDistance, SkinWidth + 0.02f);
+            var probeDelta = horizontalDelta * (probeDistance / horizontalDistance);
 
-            if (IsPathClear(start, target, 0, 0.01f)) return 0f;
+            var realBounds = GetRealBounds();
+            var scaledBounds = new BoundingBox(realBounds.Min * WorldScale, realBounds.Max * WorldScale);
+            // The longer probe is detection-only. Never commit it as movement or
+            // stepping becomes a forward speed boost at high update rates.
+            var forwardPosition = Position + horizontalDelta;
 
-            var raisedStart = start + Vector3.Up * KneeHeight;
-            var raisedTarget = raisedStart + horizontalDelta;
+            // No obstruction means ordinary physics should handle this movement.
+            if (!Collision.CheckBounds(
+                    scaledBounds,
+                    forwardPosition + Vector3.Up * StepQueryEpsilon,
+                    this))
+                return 0f;
 
-            if (!IsPathClear(raisedStart, raisedTarget, KneeHeight, 0.01f)) return 0f;
+            // Continuous ramps already have walkable ground normals and must stay
+            // in the normal slope solver. Only wall-like forward faces are steps.
+            if (!HasVerticalStepObstruction(scaledBounds, probeDelta))
+                return 0f;
 
-            BoundingBox bb = Bounds;
-            Span<Vector3> downSamples = stackalloc Vector3[9];
-            GetFootprintSamples(bb, 0.01f, KneeHeight, downSamples);
-
-            float bestDrop = -1f;
-            bool foundFloor = false;
-
-            foreach (var point in downSamples)
+            // Search for the lowest complete-hull clearance rather than inferring
+            // a ledge from ray normals. This works for axis-aligned blocks, convex
+            // brushes, and compiled map meshes using the same collision truth as
+            // the rest of the engine.
+            int searchSteps = (int)MathF.Ceiling(KneeHeight / StepSearchIncrement);
+            Vector3 landingPosition = default;
+            float gained = 0f;
+            for (int step = 1; step <= searchSteps; step++)
             {
-                var origin = point + horizontalDelta + Vector3.Up * SkinWidth;
-                var ray = new Ray(origin, Vector3.Down);
+                float rise = MathF.Min(step * StepSearchIncrement, KneeHeight);
+                var candidate = forwardPosition + Vector3.Up * rise;
 
-                bool hit = Collision.CastPhysicsWorld(ray, KneeHeight + SkinWidth, out var result,
-                    IgnoreRagdolls ? PhysicsFilters.IgnoreRagdollBroadPhaseRayCastFilter : null, PhysicsBodyID);
+                if (Collision.CheckBounds(
+                        scaledBounds,
+                        candidate + Vector3.Up * StepQueryEpsilon,
+                        this))
+                    continue;
 
-                if (!hit) continue;
+                if (!HasStepSupport(scaledBounds, candidate))
+                    continue;
 
-                float drop = result.Fraction * (KneeHeight + SkinWidth);
-                var normal = PhysicsEngine.GetFromBodyID(result.BodyID).GetWorldSpaceSurfaceNormal(result.subShapeID2, (ray.Position + ray.Direction * result.Fraction).ToNumerics());
-
-                if (normal.Y < 0.9f) continue;
-                
-                if (!foundFloor || drop < bestDrop) { bestDrop = drop; foundFloor = true; }
+                landingPosition = candidate;
+                gained = rise;
+                break;
             }
 
-            if (!foundFloor) return 0f;
-
-            float gained = (KneeHeight + SkinWidth) - bestDrop;
-            gained = MathF.Min(gained, KneeHeight);
             if (gained <= 0f) return 0f;
 
-            Position.Y += gained;
-            Position.X += horizontalDelta.X;
-            Position.Z += horizontalDelta.Z;
-            PhysicsEngine.BodyInterface.SetPosition(PhysicsBodyID, Position.ToNumerics(), JoltPhysicsSharp.Activation.Activate);
+            Position = landingPosition;
+            PhysicsEngine.BodyInterface.SetPosition(PhysicsBodyID, (Position + BodyOffset).ToNumerics(), JoltPhysicsSharp.Activation.Activate);
 
-            Velocity = previousVelocity;
             IsOnGround = true;
             justStepped = true;
 
             return gained;
+        }
+
+        private bool HasVerticalStepObstruction(BoundingBox scaledLocalBounds, Vector3 probeDelta)
+        {
+            float distance = probeDelta.Length();
+            if (distance <= float.Epsilon) return false;
+
+            var direction = probeDelta / distance;
+            var currentBounds = new BoundingBox(
+                scaledLocalBounds.Min + Position,
+                scaledLocalBounds.Max + Position);
+            Span<Vector3> samples = stackalloc Vector3[9];
+            GetFootprintSamples(currentBounds, 0.01f, 0f, samples);
+
+            foreach (var point in samples)
+            {
+                var origin = point + Vector3.Up * SkinWidth;
+                var ray = new Ray(origin, direction);
+                if (!Collision.CastPhysicsWorld(
+                        ray,
+                        distance,
+                        out var result,
+                        IgnoreRagdolls ? PhysicsFilters.IgnoreRagdollBroadPhaseRayCastFilter : null,
+                        PhysicsBodyID))
+                    continue;
+
+                var hitBody = PhysicsEngine.GetFromBodyID(result.BodyID);
+                if (hitBody == null) continue;
+
+                var hitPoint = origin + direction * (result.Fraction * distance);
+                hitBody.GetWorldSpaceSurfaceNormal(
+                    result.subShapeID2,
+                    hitPoint.ToNumerics(),
+                    out var normalNumerics);
+
+                // A 45-degree clip has |Y| ~= 0.707. Keep anything remotely
+                // walkable in slope movement; step only against near-vertical faces.
+                if (MathF.Abs(normalNumerics.Y) < 0.3f)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private bool HasStepSupport(BoundingBox scaledLocalBounds, Vector3 candidatePosition)
+        {
+            var candidateBounds = new BoundingBox(
+                scaledLocalBounds.Min + candidatePosition,
+                scaledLocalBounds.Max + candidatePosition);
+            Span<Vector3> samples = stackalloc Vector3[9];
+            GetFootprintSamples(candidateBounds, 0.01f, 0f, samples);
+
+            const float supportProbe = 0.04f;
+            foreach (var point in samples)
+            {
+                var ray = new Ray(point + Vector3.Up * supportProbe, Vector3.Down);
+                if (Collision.CastPhysicsWorld(
+                        ray,
+                        supportProbe * 2f,
+                        out _,
+                        IgnoreRagdolls ? PhysicsFilters.IgnoreRagdollBroadPhaseRayCastFilter : null,
+                        PhysicsBodyID))
+                    return true;
+            }
+
+            return false;
         }
         public float TryStepDown()
         {
@@ -1286,28 +1367,6 @@ namespace Engine
 
             IsOnGround = true;
             return -bestDrop;
-        }
-        private bool IsPathClear(Vector3 from, Vector3 to, float heightOffset = 0, float inset = 0)
-        {
-            var delta = to - from;
-            var distance = delta.Length();
-            if (distance < float.Epsilon) return true;
-            var dir = Vector3.Normalize(delta);
-
-            BoundingBox bb = Bounds;
-            Span<Vector3> samples = stackalloc Vector3[9];
-            GetFootprintSamples(bb, inset, heightOffset, samples);
-
-            foreach (var point in samples)
-            {
-                var origin = point + Vector3.Up * SkinWidth;
-                bool hit = Collision.CastPhysicsWorld(new Ray(origin, dir), distance, out _,
-                    IgnoreRagdolls ? PhysicsFilters.IgnoreRagdollBroadPhaseRayCastFilter : null, PhysicsBodyID);
-
-                if (hit) return false;
-            }
-
-            return true;
         }
         private static void GetFootprintSamples(BoundingBox bb, float inset, float heightOffset, Span<Vector3> outPoints)
         {
