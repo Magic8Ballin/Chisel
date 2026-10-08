@@ -158,6 +158,22 @@ namespace Engine
             RenderEngine.RegisterPlanarReflectors();
             RenderEngine.GenRuntimeCubemapAssociation();
         }
+        /// <summary>
+        /// Reconciles entity facade state after an externally owned Jolt step.
+        /// Unlike PostUpdateEntities, this does not execute presentation-time
+        /// queued tasks. The default render-frame path remains unchanged.
+        /// </summary>
+        public static void SynchronizePhysicsAfterExternalStep()
+        {
+            foreach (var entity in entities.GetValues())
+            {
+                if (entity.IsLight) continue;
+
+                entity?.UpdateOnGround();
+                entity?.MergePhysicsResults();
+            }
+        }
+
         public static void PostUpdateEntities(GameTime gameTime)
         {
             foreach (var entity in entities.GetValues())

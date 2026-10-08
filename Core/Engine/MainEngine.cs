@@ -494,6 +494,16 @@ namespace Engine
             }
         }
 
+        /// <summary>
+        /// Advances world physics in the ordinary render-frame host.
+        /// Games with an independently scheduled fixed world clock may override
+        /// this hook and step PhysicsEngine.StepFixed themselves instead.
+        /// </summary>
+        protected virtual void StepWorldPhysics(GameTime gameTime)
+        {
+            PhysicsEngine.Update();
+        }
+
         protected override void Update(GameTime gameTime)
         {
             if(prevMaxFPS != MaxFPS)
@@ -622,7 +632,7 @@ namespace Engine
                 }
 
                 EntityManager.UpdateEntities(gameTime);
-                PhysicsEngine.Update();
+                StepWorldPhysics(gameTime);
                 EntityManager.PostUpdateEntities(gameTime);
                 ParticleManager.UpdateSystems();
 
