@@ -462,16 +462,35 @@ namespace Engine.Physics
                 BodyLockInterface.UnlockRead(bLock);
             }
         }
+        /// <summary>
+        /// Legacy render-frame stepping. Unchanged by default for Chisel games.
+        /// </summary>
         public static void Update()
         {
             if (MainEngine.PreviousFrameDelta == 0) return;
             if (MainEngine.Instance.IsLoading) return;
+            StepFixed(float.Min(MainEngine.PreviousFrameDelta, 1f / 20f));
+        }
+
+        /// <summary>
+        /// Explicit world-physics step owned by an external fixed-tick host.
+        /// Collision callbacks and queued trigger/constraint processing use the
+        /// same path as the default Update() implementation.
+        /// Does not sync entity facades; call
+        /// EntityManager.SynchronizePhysicsAfterExternalStep() after the step.
+        /// </summary>
+        public static void StepFixed(float deltaTime)
+        {
+            if (!float.IsFinite(deltaTime) || deltaTime <= 0f)
+                throw new ArgumentOutOfRangeException(nameof(deltaTime), "Physics delta must be finite and positive.");
+            if (MainEngine.Instance.IsLoading)
+                throw new InvalidOperationException("Cannot advance physics while a map is loading.");
 
             PhysicsSystem.Gravity = System.Numerics.Vector3.UnitY * GravityPerSecond;
 
             const int collisionSteps = 2;
 
-            PhysicsUpdateError error = PhysicsSystem.Update(float.Min(MainEngine.PreviousFrameDelta,1/20f), collisionSteps, JobSystem);
+            PhysicsUpdateError error = PhysicsSystem.Update(deltaTime, collisionSteps, JobSystem);
             Debug.Assert(error == PhysicsUpdateError.None);
 
             while (PendingTriggerEvents.TryDequeue(out var evt))
